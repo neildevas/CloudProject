@@ -1,4 +1,7 @@
 from subprocess import run, PIPE
+import json
+
+# TODO: convert to python3 docker library
 
 def system(command_string):
     completed_process = run(
@@ -35,8 +38,15 @@ def run_in_container(command_string, print_output=False, dont_die=False):
 def kill_exited_containers():
     system("yes | docker container prune")
 
+def all_containers():
+    stdout, _, _ = system("docker container list -a")
+    lines = [[s for s in line.split(' ')] for line in stdout.splitlines()]
+
+    colnames, lines = lines[0], lines[1:]
+    return [{k:v for k,v in zip(colnames, line)} for line in lines]
+
 if __name__ == "__main__":
-    run_in_container("echo hello, world", print_output=True)
-    run_in_container("echo hello world; sleep 5; echo hello, world2", print_output=True)
+    run_in_container("echo hello, world", print_output=True, dont_die=True)
+    print(all_containers())
 
     kill_exited_containers()
