@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+
+import json
+import docker
+from flask import Flask
+import request
+
+PORT = 8000
+
+# DATA STRUCTURE 'cloud_info'
+cloud_info = {}
+#
+# {
+#   "application_name":
+#   {
+#     "container_ids": ["id1", "id2", ...]
+#     "load_balancers":
+#     {
+#       TODO
+#     }
+#   }
+# }
+
+dkr = docker.from_env()
+
+# TODO dont remove containers from etcd unless you search for them and they're dead
+
+def run_in_container(cmd_str):
+    return dkr.containers.run("ubuntu", cmd_str, remove=True, detach=True)
+
+def show_all_containers(all_containers=False):
+    return dkr.containers.list(all=all_containers)
+
+def kill_all_not_running():
+    dkr.containers.prune()
+
+def kill_by_id(*ids):
+    fltr = {"id":i for i in ids}
+    dkr.containers.prune(fltr)
+
+app = Flask(__name__)
+app.run(host='0.0.0.0', port=PORT)
+
+@app.route("/", methods=["POST"])
+def only_route():
+    req_dict = json.loads(request.get_json())
+
