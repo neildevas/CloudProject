@@ -35,7 +35,7 @@ dkr = docker.from_env()
 
 # DOCKER HELPERS
 
-def run_in_container(cmd_str):
+def run_in_container(cmd_str, port_map=None):
     return dkr.containers.run(
         "ubuntu",
         cmd_str,
@@ -61,7 +61,7 @@ def create_command(req):
     app_name = req["app_name"]
 
     # put app_name in cloud_info and etcd
-    cloud_info[app_name] = {}
+    cloud_info[app_name] = {"containers": {}, "load_balancers": {}}
     # TODO put app in etd
 
     return "create successful"
@@ -70,6 +70,8 @@ def run_command(req):
     if "app_name" not in req:
         return "run: app_name required"
     app_name = req["app_name"]
+    if app_name not in cloud_info:
+        return "run: app_name not found, must create app first"
 
     if "command_string" not in req:
         return "run: command_string required"
@@ -77,13 +79,48 @@ def run_command(req):
 
     port_map = {}
     if "port_map" in req:
-        port_map = req["port_map"]
+        port_map = eval(req["port_map"])
+
+    container = run_in_container(command_string)
+    cloud_info[app_name]["containers"][container.id] = (container, port_map)
 
     return "run successful"
 
+def stop_command(req):
+    if "app_name" not in req:
+        return "run: app_name required"
+    app_name = req["app_name"]
+    if app_name not in cloud_info:
+        return "run: app_name not found, must create app first"
 
-def kill_command(req):
-    pass
+    if "worker_id" not in req:
+        return "stop: worker_id required"
+    worker_id = req["worker_id"]
+
+    if worker_id not in cloud_info[app_name]["containers"]:
+        return "worker_id "+worker_id+" not found in app "+app_name
+
+    container,_ = cloud_info[app_name]["containers"][worker_id]
+
+    extra = ""
+    try: container.kill()
+    except: extra = " (container already dead)"
+
+    del cloud_info[app_name]["containers"][worker_id]
+
+    return "stop successful (worker_id-"+worker_id+")" + extra
+
+def info_command(req):
+    strs = []
+    def pretty(d, indent=0):
+       for key, value in d.items():
+          strs.append('\t' * indent + str(key))
+          if isinstance(value, dict):
+             pretty(value, indent+1)
+          else:
+             strs.append('\t' * (indent+1) + str(value))
+    pretty(cloud_info)
+    return "\n".join(strs)
 
 
 
@@ -114,8 +151,10 @@ def only_route():
         return create_command(req)
     elif "run" == command:
         return run_command(req)
-    elif "kill" == command:
-        return kill_command(req)
+    elif "stop" == command:
+        return stop_command(req)
+    elif "info" == command:
+        return info_command(req)
     else:
         return "command not found"
 
