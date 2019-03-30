@@ -3,7 +3,11 @@
 import configparser
 import json
 import docker
+import etcd
 from flask import Flask, request
+
+
+# INITIALIZATION
 
 config = configparser.ConfigParser()
 config.read("config.ini")
@@ -30,8 +34,11 @@ cloud_info = {}
 
 dkr = docker.from_env()
 
+etcd_client = etcd.Client()
+
 # TODO dont remove containers from etcd unless you search for them and they're dead
 # TODO on bootup, any containers not in etcd must be killed
+
 
 # DOCKER HELPERS
 
@@ -52,6 +59,7 @@ def kill_all_not_running():
 def kill_by_id(*ids):
     fltr = {"id":i for i in ids}
     dkr.containers.prune(fltr)
+
 
 # SERVER HELPERS
 
@@ -121,22 +129,6 @@ def info_command(req):
              strs.append('\t' * (indent+1) + str(value))
     pretty(cloud_info)
     return "\n".join(strs)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # FLASK
