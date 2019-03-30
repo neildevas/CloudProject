@@ -8,9 +8,7 @@ from flask import Flask, request
 
 
 # INITIALIZATION
-
-config = configparser.ConfigParser()
-config.read("config.ini")
+#-----------------------------------------------------------------------------------------------------
 
 # DATA STRUCTURE 'cloud_info'
 cloud_info = {}
@@ -31,19 +29,63 @@ cloud_info = {}
 #   }
 #   ...
 # }
+#
+# etcd equivalent of cloud_info:
+# /mycloud/
+# /mycloud/application_name1/
+# /mycloud/application_name1/containers/
+# /mycloud/application_name1/containers/(id1:port_map_str)
+# /mycloud/application_name1/load_balancers/TODO
 
-dkr = docker.from_env()
+config = configparser.ConfigParser()
+config.read("config.ini")
+
+docker_client = docker.from_env()
+docker_client.containers.prune() # remove all non-running containers
 
 etcd_client = etcd.Client()
 
+# populate cloud_info using etcd
+mycloud_exists = False
+try:
+    etcd_client.read("/mycloud", dir=True)
+    mycloud_exists = True
+except etcd.EtcdKeyNotFound:
+    etcd_client.write("/mycloud", dir=True)
+
+def children_of_dir_read_result(dir_read_result):
+    if next(dir_read_result.leaves) is dir_read_result: return []
+    else: return list(dir_read_result.leaves)
+
+if mycloud_exists:
+    mycloud_dir = etcd_client.read('/mycloud', dir=True)
+    for app_dir in children_of_dir_read_result(mycloud_dir):
+        [containers_dir, load_balancers_dir] = children_of_dir_read_result(app_dir)
+
+        app_name = app_dir.key
+        cloud_info[app_name] = {"containers": {}, "load_balancers": {}}
+
+        for container_file in children_of_dir_read_result(containers_dir):
+            container_id = container_file.key
+
+            try:
+                container = docker_client.containers.get(conatainer_id) # throws NotFound
+                port_map = eval(container_file.value)
+                cloud_info[app_name]["containers"][container_id] = (container, port_map)
+            except docker_lib.errors.NotFound:
+                print("container: "+container_id+" not found")
+                etcd_client.delete("/mycloud/"+app_name+"/containers/"+container_id, recursive=True)
+
+        # TODO: load balancers
+
 # TODO dont remove containers from etcd unless you search for them and they're dead
-# TODO on bootup, any containers not in etcd must be killed
 
 
 # DOCKER HELPERS
+#-----------------------------------------------------------------------------------------------------
 
 def run_in_container(cmd_str, port_map=None):
-    return dkr.containers.run(
+    return docker_client.containers.run(
         "ubuntu",
         cmd_str,
         remove=True,
@@ -51,26 +93,37 @@ def run_in_container(cmd_str, port_map=None):
     )
 
 def show_all_containers(all_containers=False):
-    return dkr.containers.list(all=all_containers)
+    return docker_client.containers.list(all=all_containers)
 
 def kill_all_not_running():
-    dkr.containers.prune()
+    docker_client.containers.prune()
 
 def kill_by_id(*ids):
     fltr = {"id":i for i in ids}
-    dkr.containers.prune(fltr)
+    docker_client.containers.prune(fltr)
 
 
 # SERVER HELPERS
+#-----------------------------------------------------------------------------------------------------
 
 def create_command(req):
     if "app_name" not in req:
-        return "createe: app_name required"
+        return "create: app_name required"
     app_name = req["app_name"]
 
-    # put app_name in cloud_info and etcd
+    # put app_name in cloud_info
+    if app_name in cloud_info:
+        return "create: app "+app_name+" already exists"
     cloud_info[app_name] = {"containers": {}, "load_balancers": {}}
-    # TODO put app in etd
+
+    # put app_name in etcd
+    try:
+        etcd_client.read("/mycloud/"+app_name, dir=True)
+        return "create: app "+app_name+" already exists in etcd"
+    except etcd.EtcdKeyNotFound: pass
+    etcd_client.write("/mycloud/"+app_name,                   None, dir=True)
+    etcd_client.write("/mycloud/"+app_name+"/containers",     None, dir=True)
+    etcd_client.write("/mycloud/"+app_name+"/load_balancers", None, dir=True)
 
     return "create successful"
 
@@ -132,6 +185,7 @@ def info_command(req):
 
 
 # FLASK
+#-----------------------------------------------------------------------------------------------------
 
 app = Flask(__name__)
 
