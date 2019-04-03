@@ -67,17 +67,17 @@ if mycloud_exists:
         containers_dir     = etcd_client.read(containers_dir.key,     dir=True)
         load_balancers_dir = etcd_client.read(load_balancers_dir.key, dir=True)
 
-        app_name = app_dir.key
+        app_name = app_dir.key.split('/')[-1]
         cloud_info[app_name] = {"containers": {}, "load_balancers": {}}
 
         for container_file in children_of_dir_read_result(containers_dir):
-            container_id = container_file.key
+            container_id = container_file.key.split('/')[-1]
 
             try:
-                container = docker_client.containers.get(conatainer_id) # throws NotFound
+                container = docker_client.containers.get(container_id) # throws NotFound
                 port_map = eval(container_file.value)
                 cloud_info[app_name]["containers"][container_id] = (container, port_map)
-            except docker_lib.errors.NotFound:
+            except docker.errors.NotFound:
                 print("container: "+container_id+" not found")
                 etcd_client.delete("/mycloud/"+app_name+"/containers/"+container_id, recursive=True)
 
@@ -170,7 +170,7 @@ def run_command(req):
     try:
         container = docker_client.containers.run(
             "ubuntu",
-            cmd_str,
+            command_string,
             remove=True,
             detach=True # TODO: actually use port_map
         )
@@ -181,7 +181,7 @@ def run_command(req):
     cloud_info[app_name]["containers"][container.id] = (container, port_map)
 
     # put container_id in etcd
-    etcd_client.write("/mycloud/"+app_name+"/"+container_id, port_map)
+    etcd_client.write("/mycloud/"+app_name+"/containers/"+container.id, port_map)
 
     return "run successful"
 
@@ -206,6 +206,7 @@ def stop_command(req):
     except: extra = " (container already dead)"
 
     del cloud_info[app_name]["containers"][worker_id]
+    etcd_client.delete("/mycloud/"+app_name+"/containers/"+container.id)
 
     return "stop successful (worker_id-"+worker_id+")" + extra
 
