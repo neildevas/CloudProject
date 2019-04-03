@@ -7,10 +7,11 @@ import sys
 help_string = (
     "usage: ./mycloud <command> [args]\n"
     "\n"
-    "  ./mycloud create <app_name>\n"
-    "  ./mycloud run <app_name> <command_string> [port_map]\n"
-    "  ./mycloud stop <app_name> <worker_id>"
-    "  ./mycloud info\n"
+    "  ./mycloud create <app_name>                              # create new app\n"
+    "  ./mycloud run <app_name> <command_string> [port_map]     # run command in worker in app\n"
+    "  ./mycloud stop <app_name> <worker_id>                    # stop a single worker\n"
+    "  ./mycloud stop_app <app_name>                            # stop entire app\n"
+    "  ./mycloud info                                           # show current state\n"
 )
 
 try:
