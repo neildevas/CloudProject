@@ -169,9 +169,10 @@ def run_command(req):
 
     try:
         container = docker_client.containers.run(
-            "ubuntu",
+            "alpine",
             command_string,
             ports=port_map,
+            tty=True,
             remove=True,
             detach=True
         )
