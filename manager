@@ -72,6 +72,7 @@ if mycloud_exists:
 
         for container_file in children_of_dir_read_result(containers_dir):
             container_id = container_file.key.split('/')[-1]
+            print(container_id)
 
             try:
                 container = docker_client.containers.get(container_id) # throws NotFound
@@ -92,11 +93,14 @@ def set_of_container_ids(cloud_info):
         app_dir = etcd_client.read(app_dir.key, dir=True)
 
         [containers_dir, load_balancers_dir] = children_of_dir_read_result(app_dir)
-        containers_dir     = etcd_client.read(containers_dir.key,     dir=True)
+        containers_dir = etcd_client.read(containers_dir.key, dir=True)
 
         for container_file in children_of_dir_read_result(containers_dir):
-            container_id = container_file.key
+            container_id = container_file.key.split('/')[-1]
             container_ids.add(container_id)
+
+    for container_id in container_ids:
+        print('cid in set: '+container_id)
 
     return container_ids
 
