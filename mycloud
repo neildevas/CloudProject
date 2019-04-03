@@ -8,15 +8,24 @@ help_string = (
     "usage: ./mycloud <command> [args]\n"
     "\n"
     "  ./mycloud create <app_name>                              # create new app\n"
-    "  ./mycloud run <app_name> <command_string> [port_map]     # run command in worker in app\n"
+    "  ./mycloud run <app_name> <command_string> <port_map>     # run command in worker in app\n"
     "  ./mycloud stop <app_name> <worker_id>                    # stop a single worker\n"
     "  ./mycloud stop_app <app_name>                            # stop entire app\n"
     "  ./mycloud info                                           # show current state\n"
+    "\n"
+    "   app_name:       string\n"
+    "   command_string: string, bash command\n"
+    "   port_map:       string, format 'int:int,int:int,...'\n"
+    "   worker_id:      string, docker container id\n"
 )
 
 try:
     [_, command, *args] = sys.argv
 except:
+    print(help_string)
+    sys.exit(1)
+maybe_help = command[:6]
+if maybe_help in ["help", "-h", "--help"]:
     print(help_string)
     sys.exit(1)
 
