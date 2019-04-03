@@ -40,13 +40,11 @@ if "create" == command:
 elif "run" == command:
     [app_name, cmd_str, port_map] = args
 
-    port_map = "{"+port_map+"}"
-
     req_to_cloud = {
         "command"        : command,
         "app_name"       : app_name,
         "command_string" : cmd_str,
-        "port_map"       : port_map
+        "port_map"       : "{"+port_map+"}"
     }
 
     call_cloud(req_to_cloud)
@@ -65,6 +63,16 @@ elif "stop" == command:
         "command"   : command,
         "app_name"  : app_name,
         "worker_id" : worker_id
+    }
+
+    call_cloud(req_to_cloud)
+
+elif "stop_app" == command:
+    [app_name] = args
+    
+    req_to_cloud = {
+        "command"  : command,
+        "app_name" : app_name
     }
 
     call_cloud(req_to_cloud)
