@@ -115,9 +115,6 @@ def kill_unrecorded_containers(cloud_info):
 
 kill_unrecorded_containers(cloud_info)
 
-# TODO dont remove containers from etcd unless you search for them and they're dead
-
-
 # DOCKER HELPERS
 #-----------------------------------------------------------------------------------------------------
 
