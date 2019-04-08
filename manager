@@ -24,7 +24,7 @@ cloud_info = {}
 #     }
 #     "load_balancers":
 #     {
-#       TODO
+#       map between external port and list of container ports
 #     }
 #   }
 #   ...
@@ -166,13 +166,14 @@ def run_command(req):
 
     port_map = {}
     if "port_map" in req:
-        port_map = eval(req["port_map"])
-
+        port_map = eval(req["port_map"]) # use the f
+        container_port = list(port_map.keys())[0]
+        load_balancer_port = port_map[container_port]
     try:
         container = docker_client.containers.run(
             "alpine",
             command_string,
-            ports=port_map,
+            ports={container_port : None}, # ports defined as {container port : host port}. If this is given, we should create a load balancer with the host port, which will act as a proxy to the container
             tty=True,
             remove=True,
             detach=True
@@ -186,6 +187,7 @@ def run_command(req):
     # put container_id in etcd
     etcd_client.write("/mycloud/"+app_name+"/containers/"+container.id, port_map)
 
+    # shouldn't this return some output?
     return "run successful"
 
 def stop_command(req):
