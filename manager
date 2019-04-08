@@ -25,6 +25,10 @@ cloud_info = {}
 #     "load_balancers":
 #     {
 #       map between external port and list of container ports
+#       localhost_1:
+#       (container_port, container_port),
+#       localhost:2:
+#       (container_port)
 #     }
 #   }
 #   ...
@@ -42,7 +46,7 @@ config.read("config.ini")
 
 docker_client = docker.from_env()
 docker_client.containers.prune() # remove all non-running containers
-
+docker_API = docker.APIClient(base_url='unix://var/run/docker.sock')
 etcd_client = etcd.Client()
 
 # populate cloud_info using etcd
@@ -164,11 +168,13 @@ def run_command(req):
         return "run: command_string required"
     command_string = req["command_string"]
 
-    port_map = {}
+    user_port_map = {}
+    proxied_port_map = {}
+    
     if "port_map" in req:
-        port_map = eval(req["port_map"]) # use the f
-        container_port = list(port_map.keys())[0]
-        load_balancer_port = port_map[container_port]
+        user_port_map = eval(req["port_map"]) # use the f
+        container_port = list(user_port_map.keys())[0]
+        host_port = user_port_map[container_port]
     try:
         container = docker_client.containers.run(
             "alpine",
@@ -182,12 +188,16 @@ def run_command(req):
         return "run: failed: "+str(e)
 
     # put container_id in cloud_info
-    cloud_info[app_name]["containers"][container.id] = (container, port_map)
+    cloud_info[app_name]["containers"][container.id] = (container, user_port_map)
 
+    # get container's random host port
+    container_port_data = docker_API.inspect_container(container.id)["NetworkSettings"]["Ports"]
+    print("container data")
+    print(container_port_data)
+    # cloud_info[app_name]["load_balancers"][host_port] = 
     # put container_id in etcd
-    etcd_client.write("/mycloud/"+app_name+"/containers/"+container.id, port_map)
+    etcd_client.write("/mycloud/"+app_name+"/containers/"+container.id, user_port_map)
 
-    # shouldn't this return some output?
     return "run successful"
 
 def stop_command(req):
