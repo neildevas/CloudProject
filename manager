@@ -4,6 +4,7 @@ import configparser
 import json
 import docker
 import etcd
+import nginx
 from flask import Flask, request
 
 
@@ -48,6 +49,7 @@ docker_client = docker.from_env()
 docker_client.containers.prune() # remove all non-running containers
 docker_API = docker.APIClient(base_url='unix://var/run/docker.sock')
 etcd_client = etcd.Client()
+nginx_client = nginx.Conf()
 
 # populate cloud_info using etcd
 mycloud_exists = False
@@ -87,6 +89,10 @@ if mycloud_exists:
                 etcd_client.delete("/mycloud/"+app_name+"/containers/"+container_id, recursive=True)
 
         # TODO: load balancers
+        for load_balancer_file in children_of_dir_read_result(load_balancers_dir):
+            load_balancer_port = load_balancer_file.key.split('/')[-1]
+            cloud_info[app_name]["load_balancers"][load_balancer_port] = load_balancer_file.value # host port of containers proxied by LB
+            # setup_load_balancer(load_balancer_port, load_balancer_file.value) # setup load balancer using its host port and the server ports
 
 def set_of_container_ids(cloud_info):
     container_ids = set()
@@ -119,6 +125,8 @@ def kill_unrecorded_containers(cloud_info):
 
 kill_unrecorded_containers(cloud_info)
 
+def setup_load_balancer():
+    pass
 # DOCKER HELPERS
 #-----------------------------------------------------------------------------------------------------
 
@@ -169,17 +177,17 @@ def run_command(req):
     command_string = req["command_string"]
 
     user_port_map = {}
-    proxied_port_map = {}
     
     if "port_map" in req:
-        user_port_map = eval(req["port_map"]) # use the f
+        user_port_map = eval(req["port_map"])
         container_port = list(user_port_map.keys())[0]
-        host_port = user_port_map[container_port]
+        host_port = user_port_map[container_port] # the user defined host port that will be used by the load balancer
+        # error check if host port already in use
     try:
         container = docker_client.containers.run(
             "alpine",
             command_string,
-            ports={container_port : None}, # ports defined as {container port : host port}. If this is given, we should create a load balancer with the host port, which will act as a proxy to the container
+            ports={container_port : None}, # use a random host port
             tty=True,
             remove=True,
             detach=True
@@ -190,14 +198,27 @@ def run_command(req):
     # put container_id in cloud_info
     cloud_info[app_name]["containers"][container.id] = (container, user_port_map)
 
-    # get container's random host port
+    # setup load balancing 
+    upstream_name = container.id+"_backend"
     container_port_data = docker_API.inspect_container(container.id)["NetworkSettings"]["Ports"]
-    print("container data")
-    print(container_port_data)
-    # cloud_info[app_name]["load_balancers"][host_port] = 
+    container_random_host_port = container_port_data[list(container_port_data.keys())[0]][0]["HostPort"]
+    backend_nginx_upstream = nginx.Upstream(upstream_name, nginx.Key('server', 'http://localhost:'+str(container_random_host_port)))
+    backend_nginx_load_balancer = nginx.Server()
+    backend_nginx_load_balancer.add(
+        nginx.Key('listen', str(host_port)),
+        nginx.Key('proxy_pass', upstream_name)
+    )
+    nginx_client.add(backend_nginx_upstream)
+    nginx_client.add(backend_nginx_load_balancer)
+    nginx.dumpf(nginx_client, '/usr/local/etc/nginx/nginx.conf')
+    # store a list of ports the load balancer is proxying for
+    proxied_port_list = [container_random_host_port]
+    cloud_info[app_name]["load_balancers"][str(host_port)] = proxied_port_list
+
     # put container_id in etcd
     etcd_client.write("/mycloud/"+app_name+"/containers/"+container.id, user_port_map)
 
+    etcd_client.write("/mycloud/"+app_name+"/load_balancers/"+str(host_port), proxied_port_list)
     return "run successful"
 
 def stop_command(req):
