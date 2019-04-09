@@ -49,7 +49,8 @@ docker_client = docker.from_env()
 docker_client.containers.prune() # remove all non-running containers
 docker_API = docker.APIClient(base_url='unix://var/run/docker.sock')
 etcd_client = etcd.Client()
-nginx_client = nginx.Conf()
+nginx_conf_path = '/usr/local/etc/nginx/nginx.conf'
+nginx_client = nginx.loadf(nginx_conf_path)
 
 # populate cloud_info using etcd
 mycloud_exists = False
@@ -202,15 +203,18 @@ def run_command(req):
     upstream_name = container.id+"_backend"
     container_port_data = docker_API.inspect_container(container.id)["NetworkSettings"]["Ports"]
     container_random_host_port = container_port_data[list(container_port_data.keys())[0]][0]["HostPort"]
-    backend_nginx_upstream = nginx.Upstream(upstream_name, nginx.Key('server', 'http://localhost:'+str(container_random_host_port)))
-    backend_nginx_load_balancer = nginx.Server()
-    backend_nginx_load_balancer.add(
+
+    nginx_stream = nginx.Stream()
+    nginx_upstream = nginx.Upstream(upstream_name, nginx.Key('server', 'localhost:'+str(container_random_host_port)))
+    nginx_server = nginx.Server()
+    nginx_server.add(
         nginx.Key('listen', str(host_port)),
         nginx.Key('proxy_pass', upstream_name)
     )
-    nginx_client.add(backend_nginx_upstream)
-    nginx_client.add(backend_nginx_load_balancer)
-    nginx.dumpf(nginx_client, '/usr/local/etc/nginx/nginx.conf')
+    nginx_stream.add(nginx_server, nginx_upstream)
+
+    nginx_client.add(nginx_stream)
+    nginx.dumpf(nginx_client, nginx_conf_path)
     # store a list of ports the load balancer is proxying for
     proxied_port_list = [container_random_host_port]
     cloud_info[app_name]["load_balancers"][str(host_port)] = proxied_port_list
