@@ -212,14 +212,15 @@ def run_command(req):
     nginx_stream = nginx.Stream()
     for _, app_info in cloud_info.items():
         app_load_balancers = app_info["load_balancers"]
-        for load_balancer_port,upstream_and_server_info in app_load_balancers:
+        for load_balancer_port,upstream_and_server_info in app_load_balancers.items():
             nginx_server = nginx.Server()
             nginx_server.add(nginx.Key('listen', str(load_balancer_port)))
-            for upstream_name, container_host_port_list in upstream_and_server_info:
-                nginx_server.add(nginx.Key('proxy_pass', upstream_name))
-                nginx_upstream = nginx.Upstream(upstream_name)
-                for port in container_host_port_list:
-                    nginx_upstream.add(nginx.Key('server', 'localhost:'+str(port)))
+            print(upstream_and_server_info)
+            upstream_name, container_host_port_list = upstream_and_server_info
+            nginx_server.add(nginx.Key('proxy_pass', upstream_name))
+            nginx_upstream = nginx.Upstream(upstream_name)
+            for port in container_host_port_list:
+                nginx_upstream.add(nginx.Key('server', 'localhost:'+str(port)))
             nginx_stream.add(nginx_server, nginx_upstream)
 
     nginx_client.add(nginx_stream)
