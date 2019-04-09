@@ -23,13 +23,14 @@ cloud_info = {}
 #       (container_object, {internal_port1:host_port1, ...})
 #       ...
 #     }
-#     "load_balancers":
+#      each application should have the following info: load balancer with host port and upstream name, server group that has a name and a list of host ports for containers
+#     "load_balancers": 
 #     {
 #       map between external port and list of container ports
-#       localhost_1:
-#       (container_port, container_port),
-#       localhost:2:
-#       (container_port)
+#       host_port_1:
+#       (upstream_name, [container_port1, container_port2,...]),
+#       host_port_2:
+#       (upstream_name, [container_port1, container_port2,...])
 #     }
 #   }
 #   ...
@@ -51,7 +52,7 @@ docker_API = docker.APIClient(base_url='unix://var/run/docker.sock')
 etcd_client = etcd.Client()
 nginx_conf_path = '/usr/local/etc/nginx/nginx.conf'
 nginx_client = nginx.loadf(nginx_conf_path)
-
+print(nginx_client.filter('Stream'))
 # populate cloud_info using etcd
 mycloud_exists = False
 try:
@@ -182,8 +183,8 @@ def run_command(req):
     if "port_map" in req:
         user_port_map = eval(req["port_map"])
         container_port = list(user_port_map.keys())[0]
-        host_port = user_port_map[container_port] # the user defined host port that will be used by the load balancer
-        # error check if host port already in use
+        host_port = user_port_map[container_port]
+    # TODO check if host port already in use and return string that prompts user to choose different port or use scale option
     try:
         container = docker_client.containers.run(
             "alpine",
@@ -198,26 +199,35 @@ def run_command(req):
 
     # put container_id in cloud_info
     cloud_info[app_name]["containers"][container.id] = (container, user_port_map)
-
-    # setup load balancing 
-    upstream_name = container.id+"_backend"
+    
+    # Put load balancing info in cloud_info
     container_port_data = docker_API.inspect_container(container.id)["NetworkSettings"]["Ports"]
-    container_random_host_port = container_port_data[list(container_port_data.keys())[0]][0]["HostPort"]
+    container_host_port = container_port_data[list(container_port_data.keys())[0]][0]["HostPort"]
+    proxied_port_list = [container_host_port]
+    cloud_info[app_name]["load_balancers"][str(host_port)] = (container.name+"_upstream", proxied_port_list)
 
+    # Remove streams and repopulate from cloud_info
+    # This is necessary in order to have 1 stream property in nginx.conf file
+    streams = nginx_client.filter('Stream')
+    if (len(streams) > 0):
+        nginx_client.remove(streams[0])
     nginx_stream = nginx.Stream()
-    nginx_upstream = nginx.Upstream(upstream_name, nginx.Key('server', 'localhost:'+str(container_random_host_port)))
-    nginx_server = nginx.Server()
-    nginx_server.add(
-        nginx.Key('listen', str(host_port)),
-        nginx.Key('proxy_pass', upstream_name)
-    )
-    nginx_stream.add(nginx_server, nginx_upstream)
+    for _, app_info in cloud_info.items():
+        # get load balancers
+        app_load_balancers = app_info["load_balancers"]
+        for port,upstream_and_server_info in app_load_balancers:
+            nginx_server = nginx.Server()
+            nginx_server.add(nginx.Key('listen', str(port)))
+            for upstream_name, container_host_port_list in upstream_and_server_info:
+                nginx_upstream = nginx.Upstream(upstream_name)
+                for port in container_host_port_list:
+                    nginx_upstream.add(nginx.Key('server', 'localhost:'+str(port)))
+                nginx_server.add(nginx.Key('proxy_pass', upstream_name))
 
+    nginx_stream.add(nginx_server, nginx_upstream)
     nginx_client.add(nginx_stream)
     nginx.dumpf(nginx_client, nginx_conf_path)
-    # store a list of ports the load balancer is proxying for
-    proxied_port_list = [container_random_host_port]
-    cloud_info[app_name]["load_balancers"][str(host_port)] = proxied_port_list
+
 
     # put container_id in etcd
     etcd_client.write("/mycloud/"+app_name+"/containers/"+container.id, user_port_map)
