@@ -203,36 +203,33 @@ def run_command(req):
     # Put load balancing info in cloud_info
     container_port_data = docker_API.inspect_container(container.id)["NetworkSettings"]["Ports"]
     container_host_port = container_port_data[list(container_port_data.keys())[0]][0]["HostPort"]
-    proxied_port_list = [container_host_port]
-    cloud_info[app_name]["load_balancers"][str(host_port)] = (container.name+"_upstream", proxied_port_list)
+    cloud_info[app_name]["load_balancers"][str(host_port)] = (container.name+"_upstream", [container_host_port])
 
-    # Remove streams and repopulate from cloud_info
-    # This is necessary in order to have 1 stream property in nginx.conf file
+    # Add all load balancer info to a Stream in nginx.conf
     streams = nginx_client.filter('Stream')
     if (len(streams) > 0):
         nginx_client.remove(streams[0])
     nginx_stream = nginx.Stream()
     for _, app_info in cloud_info.items():
-        # get load balancers
         app_load_balancers = app_info["load_balancers"]
-        for port,upstream_and_server_info in app_load_balancers:
+        for load_balancer_port,upstream_and_server_info in app_load_balancers:
             nginx_server = nginx.Server()
-            nginx_server.add(nginx.Key('listen', str(port)))
+            nginx_server.add(nginx.Key('listen', str(load_balancer_port)))
             for upstream_name, container_host_port_list in upstream_and_server_info:
+                nginx_server.add(nginx.Key('proxy_pass', upstream_name))
                 nginx_upstream = nginx.Upstream(upstream_name)
                 for port in container_host_port_list:
                     nginx_upstream.add(nginx.Key('server', 'localhost:'+str(port)))
-                nginx_server.add(nginx.Key('proxy_pass', upstream_name))
+            nginx_stream.add(nginx_server, nginx_upstream)
 
-    nginx_stream.add(nginx_server, nginx_upstream)
     nginx_client.add(nginx_stream)
     nginx.dumpf(nginx_client, nginx_conf_path)
-
 
     # put container_id in etcd
     etcd_client.write("/mycloud/"+app_name+"/containers/"+container.id, user_port_map)
 
-    etcd_client.write("/mycloud/"+app_name+"/load_balancers/"+str(host_port), proxied_port_list)
+    # TODO figure out what to put in etcd
+    # etcd_client.write("/mycloud/"+app_name+"/load_balancers/"+str(host_port), proxied_port_list)
     return "run successful"
 
 def stop_command(req):
