@@ -43,6 +43,7 @@ cloud_info = {}
 # /mycloud/application_name1/containers/(id1:port_map_str)
 # /mycloud/application_name1/load_balancers/
 
+
 config = configparser.ConfigParser()
 config.read("config.ini")
 
@@ -79,7 +80,6 @@ if mycloud_exists:
 
         for container_file in children_of_dir_read_result(containers_dir):
             container_id = container_file.key.split('/')[-1]
-            print(container_id)
 
             try:
                 container = docker_client.containers.get(container_id) # throws NotFound
@@ -92,8 +92,11 @@ if mycloud_exists:
         # TODO: load balancers
         for load_balancer_file in children_of_dir_read_result(load_balancers_dir):
             load_balancer_port = load_balancer_file.key.split('/')[-1]
-            cloud_info[app_name]["load_balancers"][load_balancer_port] = load_balancer_file.value # host port of containers proxied by LB
-            # setup_load_balancer(load_balancer_port, load_balancer_file.value) # setup load balancer using its host port and the server ports
+            upstream_and_proxied_ports = eval(load_balancer_file.value)
+            cloud_info[app_name]["load_balancers"][load_balancer_port] = upstream_and_proxied_ports # (upstream_name, [proxied_ports])
+            
+# cloud_info helpers
+#-----------------------------------------------------------------------------------------------------
 
 def set_of_container_ids(cloud_info):
     container_ids = set()
@@ -103,6 +106,7 @@ def set_of_container_ids(cloud_info):
     for app_dir in children_of_dir_read_result(mycloud_dir):
         app_dir = etcd_client.read(app_dir.key, dir=True)
 
+        # TODO this appears to be out of order sometimes
         [containers_dir, load_balancers_dir] = children_of_dir_read_result(app_dir)
         containers_dir = etcd_client.read(containers_dir.key, dir=True)
 
@@ -124,10 +128,41 @@ def kill_unrecorded_containers(cloud_info):
             try: container.kill()
             except: print("container "+container.id+" died before killing it")
 
-kill_unrecorded_containers(cloud_info)
+def is_port_in_use(host_port):
+    for _, app_info in cloud_info.items():
+        app_load_balancers = app_info["load_balancers"]
+        for load_balancer_port, _ in app_load_balancers.items():
+            if (host_port == int(load_balancer_port)):
+                return True
+    return False
 
-def setup_load_balancer():
-    pass
+# easiest way to construct an nginx.conf file
+def construct_nginx_conf_from_cloud_info():
+    streams = nginx_client.filter('Stream')
+    if (len(streams) > 0):
+        nginx_client.remove(streams[0])
+    nginx_stream = nginx.Stream()
+
+    for _, app_info in cloud_info.items():
+        if ("load_balancers") in app_info:
+            app_load_balancers = app_info["load_balancers"]
+            for load_balancer_port,upstream_and_server_info in app_load_balancers.items():
+                nginx_server = nginx.Server()
+                nginx_server.add(nginx.Key('listen', str(load_balancer_port)))
+                (upstream_name, container_host_port_list) = upstream_and_server_info
+                nginx_server.add(nginx.Key('proxy_pass', upstream_name))
+                nginx_upstream = nginx.Upstream(upstream_name)
+                for port in container_host_port_list:
+                    nginx_upstream.add(nginx.Key('server', 'localhost:'+str(port)))
+                nginx_stream.add(nginx_server, nginx_upstream)
+
+    nginx_client.add(nginx_stream)
+    nginx.dumpf(nginx_client, nginx_conf_path)
+
+
+kill_unrecorded_containers(cloud_info)
+construct_nginx_conf_from_cloud_info()
+
 # DOCKER HELPERS
 #-----------------------------------------------------------------------------------------------------
 
@@ -141,28 +176,7 @@ def kill_by_id(*ids):
     fltr = {"id":i for i in ids}
     docker_client.containers.prune(fltr)
 
-# NGINX HELPER
-#-----------------------------------------------------------------------------------------------------
-def construct_nginx_conf_from_cloud_info():
-    streams = nginx_client.filter('Stream')
-    if (len(streams) > 0):
-        nginx_client.remove(streams[0])
-    nginx_stream = nginx.Stream()
 
-    for _, app_info in cloud_info.items():
-        app_load_balancers = app_info["load_balancers"]
-    for load_balancer_port,upstream_and_server_info in app_load_balancers.items():
-        nginx_server = nginx.Server()
-        nginx_server.add(nginx.Key('listen', str(load_balancer_port)))
-        upstream_name, container_host_port_list = upstream_and_server_info
-        nginx_server.add(nginx.Key('proxy_pass', upstream_name))
-        nginx_upstream = nginx.Upstream(upstream_name)
-        for port in container_host_port_list:
-            nginx_upstream.add(nginx.Key('server', 'localhost:'+str(port)))
-        nginx_stream.add(nginx_server, nginx_upstream)
-
-    nginx_client.add(nginx_stream)
-    nginx.dumpf(nginx_client, nginx_conf_path)
 
 # SERVER HELPERS
 #-----------------------------------------------------------------------------------------------------
@@ -205,7 +219,9 @@ def run_command(req):
         user_port_map = eval(req["port_map"])
         container_port = list(user_port_map.keys())[0]
         host_port = user_port_map[container_port]
-    # TODO check if host port already in use and return string that prompts user to choose different port or use scale option
+        if (is_port_in_use(host_port)):
+            return "run: Port " + str(host_port) + " is already in use. Try another port or use the scale command."
+
     try:
         container = docker_client.containers.run(
             "alpine",
@@ -233,9 +249,10 @@ def run_command(req):
 
     # put container_id in etcd
     # TODO what port map to put in etcd?
+    # right now it is the user defined port map. But the host port is actually the port the load balancer is listening to
     etcd_client.write("/mycloud/"+app_name+"/containers/"+container.id, user_port_map)
 
-    # TODO figure out what to put in etcd
+    # put host_port in etcd, which is actually the port the load balancer is listening on
     etcd_client.write("/mycloud/"+app_name+"/load_balancers/"+str(host_port), upstream_and_proxied_ports)
     return "run successful"
 
@@ -299,7 +316,6 @@ def info_command(req):
              strs.append('\t' * (indent+1) + str(value))
     pretty(cloud_info)
     return "\n".join(strs)
-
 
 # FLASK
 #-----------------------------------------------------------------------------------------------------
