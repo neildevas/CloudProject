@@ -41,7 +41,7 @@ cloud_info = {}
 # /mycloud/application_name1/
 # /mycloud/application_name1/containers/
 # /mycloud/application_name1/containers/(id1:port_map_str)
-# /mycloud/application_name1/load_balancers/TODO
+# /mycloud/application_name1/load_balancers/
 
 config = configparser.ConfigParser()
 config.read("config.ini")
@@ -141,6 +141,28 @@ def kill_by_id(*ids):
     fltr = {"id":i for i in ids}
     docker_client.containers.prune(fltr)
 
+# NGINX HELPER
+#-----------------------------------------------------------------------------------------------------
+def construct_nginx_conf_from_cloud_info():
+    streams = nginx_client.filter('Stream')
+    if (len(streams) > 0):
+        nginx_client.remove(streams[0])
+    nginx_stream = nginx.Stream()
+
+    for _, app_info in cloud_info.items():
+        app_load_balancers = app_info["load_balancers"]
+    for load_balancer_port,upstream_and_server_info in app_load_balancers.items():
+        nginx_server = nginx.Server()
+        nginx_server.add(nginx.Key('listen', str(load_balancer_port)))
+        upstream_name, container_host_port_list = upstream_and_server_info
+        nginx_server.add(nginx.Key('proxy_pass', upstream_name))
+        nginx_upstream = nginx.Upstream(upstream_name)
+        for port in container_host_port_list:
+            nginx_upstream.add(nginx.Key('server', 'localhost:'+str(port)))
+        nginx_stream.add(nginx_server, nginx_upstream)
+
+    nginx_client.add(nginx_stream)
+    nginx.dumpf(nginx_client, nginx_conf_path)
 
 # SERVER HELPERS
 #-----------------------------------------------------------------------------------------------------
@@ -197,39 +219,24 @@ def run_command(req):
         return "run: failed: "+str(e)
 
     # put container_id in cloud_info
+    # TODO Should the port map use the random host port?
     cloud_info[app_name]["containers"][container.id] = (container, user_port_map)
     
     # Put load balancing info in cloud_info
     container_port_data = docker_API.inspect_container(container.id)["NetworkSettings"]["Ports"]
     container_host_port = container_port_data[list(container_port_data.keys())[0]][0]["HostPort"]
-    cloud_info[app_name]["load_balancers"][str(host_port)] = (container.name+"_upstream", [container_host_port])
+    upstream_and_proxied_ports = (container.name+"_upstream", [container_host_port])
+    cloud_info[app_name]["load_balancers"][str(host_port)] = upstream_and_proxied_ports
 
-    # Add all load balancer info to a Stream in nginx.conf
-    streams = nginx_client.filter('Stream')
-    if (len(streams) > 0):
-        nginx_client.remove(streams[0])
-    nginx_stream = nginx.Stream()
-    for _, app_info in cloud_info.items():
-        app_load_balancers = app_info["load_balancers"]
-        for load_balancer_port,upstream_and_server_info in app_load_balancers.items():
-            nginx_server = nginx.Server()
-            nginx_server.add(nginx.Key('listen', str(load_balancer_port)))
-            print(upstream_and_server_info)
-            upstream_name, container_host_port_list = upstream_and_server_info
-            nginx_server.add(nginx.Key('proxy_pass', upstream_name))
-            nginx_upstream = nginx.Upstream(upstream_name)
-            for port in container_host_port_list:
-                nginx_upstream.add(nginx.Key('server', 'localhost:'+str(port)))
-            nginx_stream.add(nginx_server, nginx_upstream)
-
-    nginx_client.add(nginx_stream)
-    nginx.dumpf(nginx_client, nginx_conf_path)
+    # Construct the nginx conf file
+    construct_nginx_conf_from_cloud_info()
 
     # put container_id in etcd
+    # TODO what port map to put in etcd?
     etcd_client.write("/mycloud/"+app_name+"/containers/"+container.id, user_port_map)
 
     # TODO figure out what to put in etcd
-    # etcd_client.write("/mycloud/"+app_name+"/load_balancers/"+str(host_port), proxied_port_list)
+    etcd_client.write("/mycloud/"+app_name+"/load_balancers/"+str(host_port), upstream_and_proxied_ports)
     return "run successful"
 
 def stop_command(req):
@@ -275,15 +282,10 @@ def stop_app_command(req):
         etcd_client.delete("/mycloud/"+app_name+"/containers/"+container.id)
     etcd_client.delete("/mycloud/"+app_name+"/containers", dir=True)
 
-    # delete all load_balancers in app
-    for load_balancer in cloud_info[app_name]["load_balancers"]:
-        # TODO: load balancers
-        pass
-    etcd_client.delete("/mycloud/"+app_name+"/load_balancers", dir=True)
-
     del cloud_info[app_name]
+    construct_nginx_conf_from_cloud_info()
+    etcd_client.delete("/mycloud/"+app_name+"/load_balancers", dir=True)
     etcd_client.delete("/mycloud/"+app_name, dir=True)
-
     return  "stop_app successful: "+app_name+" stopped"
 
 def info_command(req):
