@@ -52,7 +52,6 @@ docker_API = docker.APIClient(base_url='unix://var/run/docker.sock')
 etcd_client = etcd.Client()
 nginx_conf_path = '/usr/local/etc/nginx/nginx.conf'
 nginx_client = nginx.loadf(nginx_conf_path)
-print(nginx_client.filter('Stream'))
 # populate cloud_info using etcd
 mycloud_exists = False
 try:
