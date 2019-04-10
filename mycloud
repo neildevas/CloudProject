@@ -86,3 +86,14 @@ elif "stop_app" == command:
     }
 
     call_cloud(req_to_cloud)
+
+elif "scale" == command:
+    [app_name, worker_id] = args
+
+    req_to_cloud = {
+        "command"   : command,
+        "app_name"  : app_name,
+        "worker_id" : worker_id
+    }
+
+    call_cloud(req_to_cloud)
