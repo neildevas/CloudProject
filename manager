@@ -49,10 +49,11 @@ config.read("config.ini")
 
 docker_client = docker.from_env()
 docker_client.containers.prune() # remove all non-running containers
-docker_client_low_level = docker.APIClient(base_url='unix://var/run/docker.sock')
+docker_client_low_level = docker.APIClient(base_url='unix://var/run/docker.sock') # low-level API needed to get the random port and the command a container is running
 etcd_client = etcd.Client()
-nginx_conf_path = '/usr/local/etc/nginx/nginx.conf'
+nginx_conf_path = '/usr/local/etc/nginx/nginx.conf' # where the nginx config file is located
 nginx_client = nginx.loadf(nginx_conf_path)
+
 # populate cloud_info using etcd
 mycloud_exists = False
 try:
@@ -89,11 +90,11 @@ if mycloud_exists:
                 print("container: "+container_id+" not found")
                 etcd_client.delete("/mycloud/"+app_name+"/containers/"+container_id, recursive=True)
 
-        # TODO: load balancers
+        # TODO should remove any load balancers not found in nginx file. This may be tricky
         for load_balancer_file in children_of_dir_read_result(load_balancers_dir):
             load_balancer_port = load_balancer_file.key.split('/')[-1]
-            upstream_and_proxied_ports = eval(load_balancer_file.value)
-            cloud_info[app_name]["load_balancers"][load_balancer_port] = upstream_and_proxied_ports # (upstream_name, [proxied_ports])
+            upstream_and_proxied_ports = eval(load_balancer_file.value) # value = (upstream_name, [proxied_ports])
+            cloud_info[app_name]["load_balancers"][load_balancer_port] = upstream_and_proxied_ports
             
 # cloud_info helpers
 #-----------------------------------------------------------------------------------------------------
@@ -107,6 +108,7 @@ def set_of_container_ids(cloud_info):
         app_dir = etcd_client.read(app_dir.key, dir=True)
 
         # TODO this appears to be out of order sometimes
+        # Sometimes it will print 'cid in set: 3000'
         [containers_dir, load_balancers_dir] = children_of_dir_read_result(app_dir)
         containers_dir = etcd_client.read(containers_dir.key, dir=True)
 
@@ -136,7 +138,9 @@ def is_port_in_use(host_port):
                 return True
     return False
 
-# easiest way to construct an nginx.conf file
+# easiest way to construct an nginx.conf file is to populate it from cloud_info
+# Getting objects already in the nginx.conf file is tricky
+# TODO make a system call to reload nginx
 def construct_nginx_conf_from_cloud_info():
     streams = nginx_client.filter('Stream')
     if (len(streams) > 0):
@@ -156,12 +160,12 @@ def construct_nginx_conf_from_cloud_info():
                     nginx_upstream.add(nginx.Key('server', 'localhost:'+str(port)))
                 nginx_stream.add(nginx_server, nginx_upstream)
 
-    nginx_client.add(nginx_stream)
-    nginx.dumpf(nginx_client, nginx_conf_path)
+    nginx_client.add(nginx_stream) # add the stream to nginx client
+    nginx.dumpf(nginx_client, nginx_conf_path) # write to the nginx.conf file
 
 
 kill_unrecorded_containers(cloud_info)
-construct_nginx_conf_from_cloud_info()
+construct_nginx_conf_from_cloud_info() # construct nginx.conf file
 
 # DOCKER HELPERS
 #-----------------------------------------------------------------------------------------------------
@@ -214,6 +218,7 @@ def run_command(req):
 
     user_port_map = {}
     
+    # check if the requested port is already being used by a load balancer
     if "port_map" in req:
         user_port_map = eval(req["port_map"])
         container_port = list(user_port_map.keys())[0]
@@ -233,8 +238,7 @@ def run_command(req):
     except Exception as e:
         return "run: failed: "+str(e)
 
-    # put container_id in cloud_info
-    # TODO Should the port map use the random host port?
+    # TODO Should the port map be the user defined port map, or the {container_port: random_host_port} map?
     cloud_info[app_name]["containers"][container.id] = (container, user_port_map)
     
     # Put load balancing info in cloud_info
@@ -243,18 +247,19 @@ def run_command(req):
     upstream_and_proxied_ports = (container.name+"_upstream", [container_host_port])
     cloud_info[app_name]["load_balancers"][str(host_port)] = upstream_and_proxied_ports
 
-    # Construct the nginx conf file
+    # Configure the nginx.conf file
     construct_nginx_conf_from_cloud_info()
 
     # put container_id in etcd
-    # TODO what port map to put in etcd?
-    # right now it is the user defined port map. But the host port is actually the port the load balancer is listening to
+    # TODO which port map to put in etcd?
     etcd_client.write("/mycloud/"+app_name+"/containers/"+container.id, user_port_map)
 
-    # put host_port in etcd, which is actually the port the load balancer is listening on
+    # put load_balancer port in etcd
     etcd_client.write("/mycloud/"+app_name+"/load_balancers/"+str(host_port), upstream_and_proxied_ports)
     return "run successful"
 
+# TODO do we need to do anything with nginx?
+# Make sure if the port is not in use, nginx won't load balance it and won't throw an error
 def stop_command(req):
     if "app_name" not in req:
         return "run: app_name required"
@@ -280,6 +285,7 @@ def stop_command(req):
 
     return "stop successful (worker_id-"+worker_id+")" + extra
 
+# TODO finish implementing this
 def scale_command(req):
     if "app_name" not in req:
         return "scale: app_name required"
@@ -295,7 +301,11 @@ def scale_command(req):
         return "worker_id "+worker_id+" not found in app "+app_name
     container,_ = cloud_info[app_name]["containers"][worker_id]
     print(docker_client_low_level.inspect_container(container.id))
-#   get this command and run it in another container
+    return
+    # TODO get command and arguments from container using low level API
+    # Create 1-multiple containers with the same command
+    # Add each one to cloud_info
+    # configure nginx from cloud info
     
 def stop_app_command(req):
     if "app_name" not in req:
@@ -316,8 +326,8 @@ def stop_app_command(req):
     etcd_client.delete("/mycloud/"+app_name+"/containers", dir=True)
 
     del cloud_info[app_name]
-    construct_nginx_conf_from_cloud_info()
-    etcd_client.delete("/mycloud/"+app_name+"/load_balancers", dir=True)
+    construct_nginx_conf_from_cloud_info() # reconfigure nginx_conf 
+    etcd_client.delete("/mycloud/"+app_name+"/load_balancers", dir=True) # delete from etcd
     etcd_client.delete("/mycloud/"+app_name, dir=True)
     return  "stop_app successful: "+app_name+" stopped"
 
