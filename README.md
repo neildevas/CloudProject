@@ -1,6 +1,6 @@
 # CloudProject
 
-A minimal "cloud" to run commands in containers and automatically perform scaling and load balancing
+A minimal 'cloud' which runs commands in containers and scales and load-balances them
 
 ### Dependencies
 
