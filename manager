@@ -255,7 +255,7 @@ def run_command(req):
     cloud_info[app_name]["containers"][container.id] = (container, container_port_map, load_balancer_port) # add the load balancer port to the list
     
     # Put load balancing info in cloud_info
-    upstream_name_and_proxied_ports = (str(load_balancer_port)+"_upstream", [container_host_port])
+    upstream_name_and_proxied_ports = (str(load_balancer_port)+"_backend", [container_host_port])
     cloud_info[app_name]["load_balancers"][str(load_balancer_port)] = upstream_name_and_proxied_ports
 
     # Configure the nginx.conf file
