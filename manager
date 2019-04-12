@@ -297,14 +297,18 @@ def stop_command(req):
     (upstream_name, proxied_port_list) = load_balancer
     if container_host_port in proxied_port_list:
         proxied_port_list.remove(container_host_port)
-        cloud_info[app_name]["load_balancers"][str(load_balancer_port)] = load_balancer
-        etcd_client.write("/mycloud/"+app_name+"/load_balancers/"+str(load_balancer_port), (upstream_name, proxied_port_list))
+        if (len(proxied_port_list) < 1):
+            # remove the load balancer if this was the only container listening to it
+            del cloud_info[app_name]["load_balancers"][str(load_balancer_port)]
+            etcd_client.delete("/mycloud/"+app_name+"/load_balancers/"+str(load_balancer_port))
+        else:   
+            cloud_info[app_name]["load_balancers"][str(load_balancer_port)] = load_balancer
+            etcd_client.write("/mycloud/"+app_name+"/load_balancers/"+str(load_balancer_port), (upstream_name, proxied_port_list))
+        construct_nginx_conf_from_cloud_info()
 
     etcd_client.delete("/mycloud/"+app_name+"/containers/"+container.id)
-    construct_nginx_conf_from_cloud_info()
     return "stop successful (worker_id-"+worker_id+")" + extra
 
-# TODO finish implementing this
 def scale_command(req):
     if "app_name" not in req:
         return "scale: app_name required"
