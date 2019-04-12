@@ -269,8 +269,6 @@ def run_command(req):
     etcd_client.write("/mycloud/"+app_name+"/load_balancers/"+str(load_balancer_port), upstream_name_and_proxied_ports)
     return "run successful"
 
-# TODO do we need to do anything with nginx?
-# Make sure if the port is not in use, nginx won't load balance it and won't throw an error
 def stop_command(req):
     if "app_name" not in req:
         return "run: app_name required"
@@ -285,15 +283,25 @@ def stop_command(req):
     if worker_id not in cloud_info[app_name]["containers"]:
         return "worker_id "+worker_id+" not found in app "+app_name
 
-    container,_ = cloud_info[app_name]["containers"][worker_id]
+    (container, port_map, load_balancer_port) = cloud_info[app_name]["containers"][worker_id]
 
     extra = ""
     try: container.kill()
     except: extra = " (container already dead)"
 
     del cloud_info[app_name]["containers"][worker_id]
-    etcd_client.delete("/mycloud/"+app_name+"/containers/"+container.id)
 
+    # remove port from load balancer list
+    container_host_port = list(port_map.values())[0]
+    load_balancer = cloud_info[app_name]["load_balancers"][str(load_balancer_port)]
+    (upstream_name, proxied_port_list) = load_balancer
+    if container_host_port in proxied_port_list:
+        proxied_port_list.remove(container_host_port)
+        cloud_info[app_name]["load_balancers"][str(load_balancer_port)] = load_balancer
+        etcd_client.write("/mycloud/"+app_name+"/load_balancers/"+str(load_balancer_port), (upstream_name, proxied_port_list))
+
+    etcd_client.delete("/mycloud/"+app_name+"/containers/"+container.id)
+    construct_nginx_conf_from_cloud_info()
     return "stop successful (worker_id-"+worker_id+")" + extra
 
 # TODO finish implementing this
@@ -365,18 +373,19 @@ def stop_app_command(req):
 
     # delete all containers in app
     for container_id in cloud_info[app_name]["containers"]:
-        container,_ = cloud_info[app_name]["containers"][container_id]
+        container,_,load_balancer_port = cloud_info[app_name]["containers"][container_id]
 
         extra = ""
         try: container.kill()
         except: extra = " (container already dead)"
 
         etcd_client.delete("/mycloud/"+app_name+"/containers/"+container.id)
+        etcd_client.delete("/mycloud/"+app_name+"/load_balancers/"+str(load_balancer_port))
     etcd_client.delete("/mycloud/"+app_name+"/containers", dir=True)
+    etcd_client.delete("/mycloud/"+app_name+"/load_balancers", dir=True) # delete from etcd
 
     del cloud_info[app_name]
     construct_nginx_conf_from_cloud_info() # reconfigure nginx_conf 
-    etcd_client.delete("/mycloud/"+app_name+"/load_balancers", dir=True) # delete from etcd
     etcd_client.delete("/mycloud/"+app_name, dir=True)
     return  "stop_app successful: "+app_name+" stopped"
 

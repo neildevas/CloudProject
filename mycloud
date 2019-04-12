@@ -90,7 +90,7 @@ elif "stop_app" == command:
 # TODO if no number, scale up 1. If number is given, scale to that many workers
 elif "scale" == command:
     [app_name, worker_id, *num_workers] = args
-    num_workers = num_workers[0] if num_workers else 1
+    num_workers = int(num_workers[0]) if num_workers else 1
     req_to_cloud = {
         "command"       : command,
         "app_name"      : app_name,
