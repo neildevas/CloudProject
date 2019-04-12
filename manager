@@ -5,6 +5,7 @@ import json
 import docker
 import etcd
 import nginx
+import subprocess
 from flask import Flask, request
 
 
@@ -75,26 +76,37 @@ if mycloud_exists:
         [containers_dir, load_balancers_dir] = children_of_dir_read_result(app_dir)
         containers_dir     = etcd_client.read(containers_dir.key,     dir=True)
         load_balancers_dir = etcd_client.read(load_balancers_dir.key, dir=True)
-
+        print(containers_dir)
         app_name = app_dir.key.split('/')[-1]
         cloud_info[app_name] = {"containers": {}, "load_balancers": {}}
-
+        load_balancer_update_info = {}
         for container_file in children_of_dir_read_result(containers_dir):
             container_id = container_file.key.split('/')[-1]
 
+            # get port info for load balancing
+            (port_map, load_balancer_port) = eval(container_file.value)
+            print(port_map)
+            container_host_port = list(port_map.values())[0]
+            if (str(load_balancer_port) not in load_balancer_update_info):
+                load_balancer_update_info[str(load_balancer_port)] = []
+
             try:
                 container = docker_client.containers.get(container_id) # throws NotFound
-                (port_map, load_balancer_port) = eval(container_file.value)
                 cloud_info[app_name]["containers"][container_id] = (container, port_map, load_balancer_port)
+                load_balancer_update_info[str(load_balancer_port)].append(container_host_port)
             except docker.errors.NotFound:
                 print("container: "+container_id+" not found")
                 etcd_client.delete("/mycloud/"+app_name+"/containers/"+container_id, recursive=True)
 
         for load_balancer_file in children_of_dir_read_result(load_balancers_dir):
             load_balancer_port = load_balancer_file.key.split('/')[-1]
-            upstream_and_proxied_ports = eval(load_balancer_file.value) # value = (upstream_name, [proxied_ports])
-            cloud_info[app_name]["load_balancers"][load_balancer_port] = upstream_and_proxied_ports
-            
+            (upstream_name, original_proxied_ports_list) = eval(load_balancer_file.value) # value = (upstream_name, [proxied_ports])
+            if load_balancer_port in load_balancer_update_info:
+                updated_proxied_ports_list = load_balancer_update_info[load_balancer_port]
+                if (len(updated_proxied_ports_list) > 0):
+                    cloud_info[app_name]["load_balancers"][load_balancer_port] = (upstream_name, updated_proxied_ports_list)
+            # else nobody is using the load balancer anymore
+
 # cloud_info helpers
 #-----------------------------------------------------------------------------------------------------
 
@@ -160,7 +172,6 @@ def construct_nginx_conf_from_cloud_info():
     nginx_client.add(nginx_stream)
     nginx.dumpf(nginx_client, nginx_conf_path)
 
-
 kill_unrecorded_containers(cloud_info)
 construct_nginx_conf_from_cloud_info()
 
@@ -177,15 +188,6 @@ def kill_by_id(*ids):
     fltr = {"id":i for i in ids}
     docker_client.containers.prune(fltr)
 
-def run_container(command_string, container_port='80'):
-    return docker_client.containers.run(
-        "alpine",
-        command_string,
-        ports={container_port : None}, # use a random host port
-        tty=True,
-        remove=True,
-        detach=True
-    )
 def get_container_host_port(container):
     container_port_data = docker_low_level_client.inspect_container(container.id)["NetworkSettings"]["Ports"]
     container_host_port = container_port_data[list(container_port_data.keys())[0]][0]["HostPort"]
