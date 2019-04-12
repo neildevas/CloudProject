@@ -7,6 +7,8 @@ import etcd
 import nginx
 from flask import Flask, request
 
+import os
+print(os.environ['USER'])
 
 # INITIALIZATION
 #-----------------------------------------------------------------------------------------------------
@@ -26,11 +28,9 @@ cloud_info = {}
 #      each application should have the following info: load balancer with host port and upstream name, server group that has a name and a list of host ports for containers
 #     "load_balancers": 
 #     {
-#       map between external port and list of container ports
 #       host_port_1:
 #       (upstream_name, [container_port1, container_port2,...]),
-#       host_port_2:
-#       (upstream_name, [container_port1, container_port2,...])
+#       ...
 #     }
 #   }
 #   ...
@@ -43,16 +43,17 @@ cloud_info = {}
 # /mycloud/application_name1/containers/(id1:port_map_str)
 # /mycloud/application_name1/load_balancers/
 
-
 config = configparser.ConfigParser()
 config.read("config.ini")
 
+# for basic docker commands
 docker_client = docker.from_env()
-docker_client.containers.prune() # remove all non-running containers
-docker_low_level_client = docker.APIClient(base_url='unix://var/run/docker.sock') # low-level API needed to get the random port and the command a container is running
+# for getting port and command of a container
+docker_low_level_client = docker.APIClient(base_url='unix://var/run/docker.sock')
+# for reads/writes to etcd
 etcd_client = etcd.Client()
-nginx_conf_path = '/usr/local/etc/nginx/nginx.conf' # where the nginx config file is located
-nginx_client = nginx.loadf(nginx_conf_path)
+# for reading/writing nginx conf
+nginx_client = nginx.loadf(config['NGINX']['FilePath'])
 
 # populate cloud_info using etcd
 mycloud_exists = False
@@ -122,6 +123,8 @@ def set_of_container_ids(cloud_info):
 
 # kill containers not in cloud_info
 def kill_unrecorded_containers(cloud_info):
+    docker_client.containers.prune() # remove all non-running containers
+
     recorded_container_ids = set_of_container_ids(cloud_info)
 
     for container in docker_client.containers.list(all=True):
@@ -158,7 +161,7 @@ def construct_nginx_conf_from_cloud_info():
                 nginx_stream.add(nginx_server, nginx_upstream)
 
     nginx_client.add(nginx_stream)
-    nginx.dumpf(nginx_client, nginx_conf_path)
+    nginx.dumpf(nginx_client, config['NGINX']['FilePath'])
 
 
 kill_unrecorded_containers(cloud_info)
