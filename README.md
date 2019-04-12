@@ -13,7 +13,7 @@ A minimal "cloud" to run commands in containers and automatically perform scalin
 
 Slight configuration is needed:
 
-- `python3 -m pip install -r requirements.xtx` 
+- `python3 -m pip install -r requirements.txt` 
 - the user running the scripts will need permission to use docker and nginx
 
 ### Running It
