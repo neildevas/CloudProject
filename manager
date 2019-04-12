@@ -73,19 +73,22 @@ if mycloud_exists:
     for app_dir in children_of_dir_read_result(mycloud_dir):
         app_dir = etcd_client.read(app_dir.key, dir=True)
 
-        [containers_dir, load_balancers_dir] = children_of_dir_read_result(app_dir)
-        containers_dir     = etcd_client.read(containers_dir.key,     dir=True)
-        load_balancers_dir = etcd_client.read(load_balancers_dir.key, dir=True)
-        print(containers_dir)
         app_name = app_dir.key.split('/')[-1]
+
+        # BUG sometimes this gets read in as [load_balancers_dir, containers_dir] (problem with etcd)
+
+        [containers_dir, load_balancers_dir] = children_of_dir_read_result(app_dir)
+        # containers_dir     = etcd_client.read(containers_dir.key,     dir=True)
+        # load_balancers_dir = etcd_client.read(load_balancers_dir.key, dir=True)
+        containers_dir = etcd_client.read("/mycloud/"+app_name+"/containers", dir=True)
+        load_balancers_dir = etcd_client.read("/mycloud/"+app_name+"/load_balancers", dir=True)
         cloud_info[app_name] = {"containers": {}, "load_balancers": {}}
         load_balancer_update_info = {}
         for container_file in children_of_dir_read_result(containers_dir):
             container_id = container_file.key.split('/')[-1]
 
-            # get port info for load balancing
+            # get port info to update load balancers
             (port_map, load_balancer_port) = eval(container_file.value)
-            print(port_map)
             container_host_port = list(port_map.values())[0]
             if (str(load_balancer_port) not in load_balancer_update_info):
                 load_balancer_update_info[str(load_balancer_port)] = []
@@ -100,12 +103,15 @@ if mycloud_exists:
 
         for load_balancer_file in children_of_dir_read_result(load_balancers_dir):
             load_balancer_port = load_balancer_file.key.split('/')[-1]
-            (upstream_name, original_proxied_ports_list) = eval(load_balancer_file.value) # value = (upstream_name, [proxied_ports])
+            (upstream_name, _) = eval(load_balancer_file.value) # value = (upstream_name, [proxied_ports])
             if load_balancer_port in load_balancer_update_info:
                 updated_proxied_ports_list = load_balancer_update_info[load_balancer_port]
                 if (len(updated_proxied_ports_list) > 0):
                     cloud_info[app_name]["load_balancers"][load_balancer_port] = (upstream_name, updated_proxied_ports_list)
-            # else nobody is using the load balancer anymore
+                    etcd_client.write("/mycloud/"+app_name+"/load_balancers/"+load_balancer_port, (upstream_name, updated_proxied_ports_list))
+                else :
+                    etcd_client.delete("/mycloud/"+app_name+"/load_balancers/"+load_balancer_port, recursive=True)
+                # else nobody is using the load balancer anymore
 
 # cloud_info helpers
 #-----------------------------------------------------------------------------------------------------
