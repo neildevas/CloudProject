@@ -97,5 +97,4 @@ elif "scale" == command:
         "worker_id"     : worker_id,
         "num_workers"   : num_workers
     }
-
     call_cloud(req_to_cloud)
