@@ -2,15 +2,29 @@
 
 A minimal "cloud" to run commands in containers and automatically perform scaling and load balancing
 
-## Dependencies
+### Dependencies
 
-- `python3.5`
-- `virtualenv`
+- `python3.5` / `pip`
 - `docker`
 - `etcd`
 - `nginx`
 
-## Load balancing
+### Installation
+
+Slight configuration is needed:
+
+- `python3 -m pip install -r requirements.xtx` 
+- the user running the scripts will need permission to use docker and nginx
+
+### Running It
+
+In one terminal, do `./manager` to run the 'cloud manager server'
+
+Then, in another, do `./mycloud <command> <args>` for each command you'd like to issue to the 'cloud' being operated by the 'cloud manager server'
+
+### More Information
+
+#### Load balancing internals
 
 Load balancing works by manipulating the `nginx` config file at `/etc/nginx/nginx.conf`.
 
