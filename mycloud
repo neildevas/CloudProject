@@ -7,16 +7,18 @@ import sys
 help_string = (
     "usage: ./mycloud <command> [args]\n"
     "\n"
+    "  ./mycloud info                                           # show current state\n"
     "  ./mycloud create <app_name>                              # create new app\n"
     "  ./mycloud run <app_name> <command_string> <port_map>     # run command in worker in app\n"
     "  ./mycloud stop <app_name> <worker_id>                    # stop a single worker\n"
     "  ./mycloud stop_app <app_name>                            # stop entire app\n"
-    "  ./mycloud info                                           # show current state\n"
+    "  ./mycloud scale <app_name> <worker_id> <num_workers>     # scale up worker\n"
     "\n"
     "   app_name:       string\n"
     "   command_string: string, bash command\n"
-    "   port_map:       string, format 'int:int,int:int,...'\n"
+    "   port_map:       string, format 'int:int,int:int,...' - can be empty string\n"
     "   worker_id:      string, docker container id\n"
+    "   num_workers:    int,    > 0 - can be empty string\n"
 )
 
 try:
@@ -89,8 +91,8 @@ elif "stop_app" == command:
 
 # TODO if no number, scale up 1. If number is given, scale to that many workers
 elif "scale" == command:
-    [app_name, worker_id, *num_workers] = args
-    num_workers = int(num_workers[0]) if num_workers else 1
+    [app_name, worker_id, num_workers] = args
+    num_workers = int(num_workers) if num_workers else 1
     req_to_cloud = {
         "command"       : command,
         "app_name"      : app_name,
