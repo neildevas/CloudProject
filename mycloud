@@ -101,3 +101,8 @@ elif "scale" == command:
         "num_workers"   : num_workers
     }
     call_cloud(req_to_cloud)
+
+else:
+    print("ERROR: {} is not a valid command".format(command))
+    print()
+    print(help_string)
