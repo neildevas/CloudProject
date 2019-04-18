@@ -41,7 +41,7 @@ cloud_info = {}
 # /mycloud/
 # /mycloud/application_name1/
 # /mycloud/application_name1/containers/
-# /mycloud/application_name1/containers/(id1:port_map_str)
+# /mycloud/application_name1/containers/(id1:port_map_str,load_balancer_port)
 # /mycloud/application_name1/load_balancers/
 
 config = configparser.ConfigParser()
@@ -72,19 +72,16 @@ if mycloud_exists:
     mycloud_dir = etcd_client.read('/mycloud', dir=True)
 
     for app_dir in children_of_dir_read_result(mycloud_dir):
-        app_dir = etcd_client.read(app_dir.key, dir=True)
+        app_dir = etcd_client.read(app_dir.key, dir=True, sorted=True)
 
         app_name = app_dir.key.split('/')[-1]
 
-        # BUG sometimes this gets read in as [load_balancers_dir, containers_dir] (problem with etcd)
-
         [containers_dir, load_balancers_dir] = children_of_dir_read_result(app_dir)
-        # containers_dir     = etcd_client.read(containers_dir.key,     dir=True)
-        # load_balancers_dir = etcd_client.read(load_balancers_dir.key, dir=True)
         containers_dir = etcd_client.read("/mycloud/"+app_name+"/containers", dir=True)
         load_balancers_dir = etcd_client.read("/mycloud/"+app_name+"/load_balancers", dir=True)
         cloud_info[app_name] = {"containers": {}, "load_balancers": {}}
         load_balancer_update_info = {}
+
         for container_file in children_of_dir_read_result(containers_dir):
             container_id = container_file.key.split('/')[-1]
 
