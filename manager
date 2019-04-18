@@ -3,13 +3,11 @@
 import configparser
 import json
 import docker
+from docker.types import Mount
 import etcd
 import nginx
 import subprocess
 from flask import Flask, request
-
-import os
-print(os.environ['USER'])
 
 # INITIALIZATION
 #-----------------------------------------------------------------------------------------------------
@@ -23,13 +21,12 @@ cloud_info = {}
 #     "containers":
 #     {
 #       "id1":
-#       (container_object, {internal_port1:host_port1, ...}, load_balancer_port)
+#       (container_object, {internal_port1:host_port1}, load_balancer_port, copy_dir)
 #       ...
 #     }
-#      each application should have the following info: load balancer with host port and upstream name, server group that has a name and a list of host ports for containers
 #     "load_balancers": 
 #     {
-#       host_port_1:
+#       load_balancer_port:
 #       (upstream_name, [container_port1, container_port2,...]),
 #       ...
 #     }
@@ -38,10 +35,11 @@ cloud_info = {}
 # }
 #
 # etcd equivalent of cloud_info:
+#
 # /mycloud/
 # /mycloud/application_name1/
 # /mycloud/application_name1/containers/
-# /mycloud/application_name1/containers/(id1:port_map_str,load_balancer_port)
+# /mycloud/application_name1/containers/id1:(port_map_str,load_balancer_port,copy_dir)
 # /mycloud/application_name1/load_balancers/
 
 config = configparser.ConfigParser()
@@ -69,7 +67,7 @@ def children_of_dir_read_result(dir_read_result):
     else: return list(dir_read_result.leaves)
 
 if mycloud_exists:
-    mycloud_dir = etcd_client.read('/mycloud', dir=True)
+    mycloud_dir = etcd_client.read('/mycloud', dir=True, sorted=True)
 
     for app_dir in children_of_dir_read_result(mycloud_dir):
         app_dir = etcd_client.read(app_dir.key, dir=True, sorted=True)
@@ -86,14 +84,14 @@ if mycloud_exists:
             container_id = container_file.key.split('/')[-1]
 
             # get port info to update load balancers
-            (port_map, load_balancer_port) = eval(container_file.value)
+            (port_map, load_balancer_port, copy_dir) = eval(container_file.value)
             container_host_port = list(port_map.values())[0]
             if (str(load_balancer_port) not in load_balancer_update_info):
                 load_balancer_update_info[str(load_balancer_port)] = []
 
             try:
                 container = docker_client.containers.get(container_id) # throws NotFound
-                cloud_info[app_name]["containers"][container_id] = (container, port_map, load_balancer_port)
+                cloud_info[app_name]["containers"][container_id] = (container, port_map, load_balancer_port, copy_dir)
                 load_balancer_update_info[str(load_balancer_port)].append(container_host_port)
             except docker.errors.NotFound:
                 print("container: "+container_id+" not found")
@@ -110,6 +108,16 @@ if mycloud_exists:
                 else :
                     etcd_client.delete("/mycloud/"+app_name+"/load_balancers/"+load_balancer_port, recursive=True)
                 # else nobody is using the load balancer anymore
+
+# NGINX HELPER
+#-----------------------------------------------------------------------------------------------------
+
+def nginx_reload_conf():
+    subprocess.run(['nginx', '-s', 'reload'])
+
+def start_nginx():
+    subprocess.run(['nginx'])
+#start_nginx()
 
 # cloud_info helpers
 #-----------------------------------------------------------------------------------------------------
@@ -155,7 +163,6 @@ def is_port_in_use(host_port):
                 return True
     return False
 
-# TODO make a system call to reload nginx
 def construct_nginx_conf_from_cloud_info():
     streams = nginx_client.filter('Stream')
     if (len(streams) > 0):
@@ -177,6 +184,7 @@ def construct_nginx_conf_from_cloud_info():
 
     nginx_client.add(nginx_stream)
     nginx.dumpf(nginx_client, config['NGINX']['FilePath'])
+    nginx_reload_conf()
 
 kill_unrecorded_containers(cloud_info)
 construct_nginx_conf_from_cloud_info()
@@ -233,6 +241,12 @@ def run_command(req):
     if "command_string" not in req:
         return "run: command_string required"
     command_string = req["command_string"]
+    command_string = 'sh -c \'' + command_string.replace('\'', '\'"\'"\'') + '\''
+    print(command_string)
+
+    if "copy_dir" not in req:
+        return "run: copy_dir required"
+    copy_dir = req["copy_dir"]
 
     user_port_map = {}
     container_port_map = {}
@@ -247,20 +261,32 @@ def run_command(req):
         if (is_port_in_use(load_balancer_port)):
             return "run: Port " + str(load_balancer_port) + " is already in use. Try another port or use the scale command."
     try:
-        container = docker_client.containers.run(
-        "alpine",
-        command_string,
-        ports={container_port : None}, # use a random host port
-        tty=True,
-        remove=True,
-        detach=True
-    )
+        if copy_dir != "NONE":
+            container = docker_client.containers.run(
+                "alpine",
+                command_string,
+                ports={container_port : None}, # use a random host port
+                tty=True,
+                # remove=True,
+                detach=True,
+                mounts=[Mount('/app', copy_dir, type='bind', read_only=True)],
+                working_dir='/app'
+            )
+        else:
+            container = docker_client.containers.run(
+                "alpine",
+                command_string,
+                ports={container_port : None}, # use a random host port
+                tty=True,
+                # remove=True,
+                detach=True
+            )
     except Exception as e:
         return "run: failed: "+str(e)
 
     container_host_port = get_container_host_port(container)
     container_port_map = {container_port : container_host_port}
-    cloud_info[app_name]["containers"][container.id] = (container, container_port_map, load_balancer_port) # add the load balancer port to the list
+    cloud_info[app_name]["containers"][container.id] = (container, container_port_map, load_balancer_port, copy_dir) # add the load balancer port to the list
     
     # Put load balancing info in cloud_info
     upstream_name_and_proxied_ports = (str(load_balancer_port)+"_backend", [container_host_port])
@@ -269,7 +295,7 @@ def run_command(req):
     # Configure the nginx.conf file
     construct_nginx_conf_from_cloud_info()
 
-    etcd_client.write("/mycloud/"+app_name+"/containers/"+container.id, (container_port_map, load_balancer_port))
+    etcd_client.write("/mycloud/"+app_name+"/containers/"+container.id, (container_port_map, load_balancer_port, copy_dir))
 
     # put load_balancer port in etcd
     etcd_client.write("/mycloud/"+app_name+"/load_balancers/"+str(load_balancer_port), upstream_name_and_proxied_ports)
@@ -289,7 +315,7 @@ def stop_command(req):
     if worker_id not in cloud_info[app_name]["containers"]:
         return "worker_id "+worker_id+" not found in app "+app_name
 
-    (container, port_map, load_balancer_port) = cloud_info[app_name]["containers"][worker_id]
+    (container, port_map, load_balancer_port, copy_dir) = cloud_info[app_name]["containers"][worker_id]
 
     extra = ""
     try: container.kill()
@@ -320,46 +346,63 @@ def scale_command(req):
         return "scale: app_name required"
     app_name = req["app_name"]
     if app_name not in cloud_info:
-        return "stop_app: app_name not found, must create app first"
+        return "scale: app_name not found, must create app first"
 
     if "worker_id" not in req:
-        return "stop: worker_id required"
+        return "scale: worker_id required"
     worker_id = req["worker_id"]
     if worker_id not in cloud_info[app_name]["containers"]:
         return "worker_id "+worker_id+" not found in app "+app_name
 
     num_workers = req["num_workers"]
+    if num_workers < 1:
+        return "scale: failed: num_workers ({}) < 1".format(num_workers)
 
     # Get the container we want to scale
-    (container,port_map, load_balancer_port) = cloud_info[app_name]["containers"][worker_id]
+    (container,port_map,load_balancer_port,copy_dir) = cloud_info[app_name]["containers"][worker_id]
+    print(copy_dir)
 
     # get the command
     container_info_dict = docker_low_level_client.inspect_container(container.id)
-    command_name = container_info_dict["Path"]
-    command_args = " ".join(container_info_dict["Args"])
-    final_command_str = command_name + " " + command_args
+    sh_command = container_info_dict["Path"]
+    print(container_info_dict['Args'])
+    [c_flag, command_string] = container_info_dict["Args"]
+    final_command_str = 'sh -c \'' + command_string.replace('\'', '\'"\'"\'') + '\''
 
     # get the internal container port
     container_internal_port = list(port_map.keys())[0]
+    container_host_port = get_container_host_port(container)
 
     # build the request and call run_command for requested number of new workers
     for _ in range(num_workers):
         try:
-            container = docker_client.containers.run(
-                "alpine",
-                final_command_str,
-                ports={container_internal_port : None}, # use a random host port
-                tty=True,
-                remove=True,
-                detach=True
-            )
+            if copy_dir != "NONE":
+                container = docker_client.containers.run(
+                    "alpine",
+                    final_command_str,
+                    ports={container_internal_port : None}, # use a random host port
+                    tty=True,
+                    # remove=True,
+                    detach=True,
+                    mounts=[Mount('/app', copy_dir, type='bind', read_only=True)],
+                    working_dir='/app'
+                )
+            else:
+                container = docker_client.containers.run(
+                    "alpine",
+                    final_command_str,
+                    ports={container_internal_port : None}, # use a random host port
+                    tty=True,
+                    # remove=True,
+                    detach=True
+                )
         except Exception as e:
-            return "run: failed: "+str(e)
+            return "scale: failed: "+str(e)
 
         # store in cloud_info app containers
         container_host_port = get_container_host_port(container)
         container_port_map = {container_internal_port : container_host_port}
-        cloud_info[app_name]["containers"][container.id] = (container, container_port_map, load_balancer_port)
+        cloud_info[app_name]["containers"][container.id] = (container, container_port_map, load_balancer_port, copy_dir)
 
         # store in cloud_info app load balancers
         load_balancer = cloud_info[app_name]["load_balancers"][str(load_balancer_port)]
@@ -371,7 +414,7 @@ def scale_command(req):
         construct_nginx_conf_from_cloud_info()
 
         # write to etcd
-        etcd_client.write("/mycloud/"+app_name+"/containers/"+container.id, (container_port_map, load_balancer_port))
+        etcd_client.write("/mycloud/"+app_name+"/containers/"+container.id, (container_port_map, load_balancer_port, copy_dir))
         etcd_client.write("/mycloud/"+app_name+"/load_balancers/"+str(load_balancer_port), (upstream_name, proxied_port_list))
 
     return "scale successful"
@@ -385,14 +428,18 @@ def stop_app_command(req):
 
     # delete all containers and load balancers in app
     for container_id in cloud_info[app_name]["containers"]:
-        container,_,load_balancer_port = cloud_info[app_name]["containers"][container_id]
+        container,_,load_balancer_port,copy_dir = cloud_info[app_name]["containers"][container_id]
 
         extra = ""
         try: container.kill()
         except: extra = " (container already dead)"
 
         etcd_client.delete("/mycloud/"+app_name+"/containers/"+container.id)
-        etcd_client.delete("/mycloud/"+app_name+"/load_balancers/"+str(load_balancer_port))
+
+        try: # can fail if already deleted
+            etcd_client.delete("/mycloud/"+app_name+"/load_balancers/"+str(load_balancer_port))
+        except:
+            print('redundant etcd load balancer removal: {}'.format(load_balancer_port))
 
     etcd_client.delete("/mycloud/"+app_name+"/containers", dir=True)
     etcd_client.delete("/mycloud/"+app_name+"/load_balancers", dir=True)
