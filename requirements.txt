@@ -12,7 +12,7 @@ MarkupSafe==1.1.1
 python-etcd==0.4.5
 requests==2.21.0
 six==1.12.0
-urllib3==1.24.1
+urllib3==1.26.5
 websocket-client==0.56.0
 Werkzeug==0.15.1
 python-nginx==1.5.3
